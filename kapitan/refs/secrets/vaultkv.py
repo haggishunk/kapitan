@@ -89,39 +89,40 @@ def vault_obj(vault_parameters):
         VAULT_SKIP_VERIFY: false
     Authenticate client to server and return client object
     """
-    env = get_env(vault_parameters)
+    if not cached.vaultkv_obj:
+        env = get_env(vault_parameters)
 
-    client = hvac.Client(**{k: v for k, v in env.items() if k != "auth"})
+        client = hvac.Client(**{k: v for k, v in env.items() if k != "auth"})
 
-    auth_type = vault_parameters["auth"]
-    # GET TOKEN EITHER FROM ENVIRONMENT OF FILE
-    if auth_type in ["token", "github"]:
-        env["token"] = os.getenv("VAULT_TOKEN")
-        if not env["token"]:
-            try:
-                token_file = os.path.join(os.path.expanduser("~"), ".vault-token")
-                with open(token_file, "r") as f:
-                    env["token"] = f.read()
-                if env["token"] == "":
-                    raise VaultError("{file} is empty".format(file=token_file))
-            except IOError:
-                raise VaultError("Cannot read file {file}".format(file=token_file))
-    # DIFFERENT LOGIN METHOD BASED ON AUTHENTICATION TYPE
-    if auth_type == "token":
-        client.token = env["token"]
-    elif auth_type == "ldap":
-        client.auth.ldap.login(username=os.getenv("VAULT_USERNAME"), password=os.getenv("VAULT_PASSWORD"))
-    elif auth_type == "userpass":
-        client.auth_userpass(username=os.getenv("VAULT_USERNAME"), password=os.getenv("VAULT_PASSWORD"))
-    elif auth_type == "approle":
-        client.auth_approle(os.getenv("VAULT_ROLE_ID"), secret_id=os.getenv("VAULT_SECRET_ID"))
-    elif auth_type == "github":
-        client.auth.github.login(token=env["token"])
-    else:
-        raise "Authentication type '{auth}' not supported".format(auth=auth_type)
+        auth_type = vault_parameters["auth"]
+        # GET TOKEN EITHER FROM ENVIRONMENT OF FILE
+        if auth_type in ["token", "github"]:
+            env["token"] = os.getenv("VAULT_TOKEN")
+            if not env["token"]:
+                try:
+                    token_file = os.path.join(os.path.expanduser("~"), ".vault-token")
+                    with open(token_file, "r") as f:
+                        env["token"] = f.read()
+                    if env["token"] == "":
+                        raise VaultError("{file} is empty".format(file=token_file))
+                except IOError:
+                    raise VaultError("Cannot read file {file}".format(file=token_file))
+        # DIFFERENT LOGIN METHOD BASED ON AUTHENTICATION TYPE
+        if auth_type == "token":
+            client.token = env["token"]
+        elif auth_type == "ldap":
+            client.auth.ldap.login(username=os.getenv("VAULT_USERNAME"), password=os.getenv("VAULT_PASSWORD"))
+        elif auth_type == "userpass":
+            client.auth_userpass(username=os.getenv("VAULT_USERNAME"), password=os.getenv("VAULT_PASSWORD"))
+        elif auth_type == "approle":
+            client.auth_approle(os.getenv("VAULT_ROLE_ID"), secret_id=os.getenv("VAULT_SECRET_ID"))
+        elif auth_type == "github":
+            client.auth.github.login(token=env["token"])
+        else:
+            raise "Authentication type '{auth}' not supported".format(auth=auth_type)
 
-    if client.is_authenticated():
-        return client
+    if cached.vaultkv_obj.is_authenticated():
+        return cached.vaultkv_obj
     else:
         raise VaultError("Vault Authentication Error, Environment Variables defined?")
 
