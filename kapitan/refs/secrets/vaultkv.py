@@ -17,7 +17,7 @@ from kapitan.refs.base import RefError
 from kapitan.refs.base64 import Base64Ref, Base64RefBackend
 
 import hvac
-from hvac.exceptions import Forbidden, InvalidPath
+from hvac.exceptions import Forbidden, InvalidPath, InvalidRequest  # InvalidRequest returned when cas fails
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +138,7 @@ class VaultSecret(Base64Ref):
         """
         Set vault parameter and encoding of data
         """
-        self.data = data
+        self.data = data  # data consists of secret path:key
         self.vault_params = vault_params
         super().__init__(self.data, **kwargs)
         self.type_name = "vaultkv"
@@ -179,6 +179,78 @@ class VaultSecret(Base64Ref):
 
         return self._decrypt()
 
+    def _encrypt(self, data, value):
+        """
+        stores secret value in vault kv
+        data is comprised of two parts: `path_in_vault:key`
+        value is secret string to store
+
+        NOTE: vault stores the secret as a json object which allows
+        for more than one `key` per secret given by `path_in_vault`.
+        the encrypt operation should try to read any existing secret
+        and update the secret's dict `key` with the specified `value`
+        """
+        # STEP 1: retrieve any existing secret json object as dict
+        try:
+            client = vault_obj(self.vault_params)
+            # token will comprise of two parts path_in_vault:key
+            data_path, data_key = data.decode("utf-8").rstrip().split(":")
+            if self.vault_params.get("engine") == "kv":
+                response = client.secrets.kv.v1.read_secret(
+                    path=data_path, mount_point=self.vault_params.get("mount", "secret")
+                )
+                secret = response["data"]
+            else:
+                response = client.secrets.kv.v2.read_secret_version(
+                    path=data_path, mount_point=self.vault_params.get("mount", "secret")
+                )
+                secret = response["data"]["data"]
+            client.adapter.close()
+        except InvalidPath:
+            secret = dict()
+        except Forbidden:
+            raise VaultError(
+                "Permission Denied. "
+                + "make sure the token is authorised to access {path} on Vault".format(path=data_path)
+            )
+        # this is catch-all, perhaps refine?
+        # although, any error here might be best reported during the write/update operation
+        except Exception as e:
+            raise VaultError(e)
+        # STEP 2 update secret with new data_key and value
+        assert isinstance(value, str)
+        # is encoding important?
+        secret[data_key] = value
+        try:
+            client = vault_obj(self.vault_params)
+            # token will comprise of two parts path_in_vault:key
+            data_path, data_key = data.decode("utf-8").rstrip().split(":")
+            if self.vault_params.get("engine") == "kv":
+                response = client.secrets.kv.v1.create_or_update_secret(
+                    path=data_path, secret=secret,
+                    # method to be implemented later
+                    mount_point=self.vault_params.get("mount", "secret")
+                )
+                # shall we do anything with response?
+            else:
+                response = client.secrets.kv.v2.create_or_update_secret(
+                    path=data_path, secret=secret,
+                    # cas setting hardcoded for safety 
+                    cas=1,
+                    mount_point=self.vault_params.get("mount", "secret")
+                )
+                # shall we do anything with response?
+            client.adapter.close()
+        except InvalidRequest:
+            raise VaultError()  # special vault error here due to CAS failure
+        except InvalidPath:
+            raise VaultError()  # special vault error here for back kv backend mount
+        except Forbidden:
+            raise VaultError(
+                "Permission Denied. "
+                + "make sure the token is authorised to access {path} on Vault".format(path=data_path)
+            )
+
     def _decrypt(self):
         """
         Authenticate with Vault server & returns value of the key from secret
@@ -188,29 +260,29 @@ class VaultSecret(Base64Ref):
         try:
             client = vault_obj(self.vault_params)
             # token will comprise of two parts path_in_vault:key
-            data = self.data.decode("utf-8").rstrip().split(":")
+            data_path, data_key = self.data.decode("utf-8").rstrip().split(":")
             return_data = ""
             if self.vault_params.get("engine") == "kv":
                 response = client.secrets.kv.v1.read_secret(
-                    path=data[0], mount_point=self.vault_params.get("mount", "secret")
+                    path=data_path, mount_point=self.vault_params.get("mount", "secret")
                 )
-                return_data = response["data"][data[1]]
+                return_data = response["data"][data_key]
             else:
                 response = client.secrets.kv.v2.read_secret_version(
-                    path=data[0], mount_point=self.vault_params.get("mount", "secret")
+                    path=data_path, mount_point=self.vault_params.get("mount", "secret")
                 )
-                return_data = response["data"]["data"][data[1]]
+                return_data = response["data"]["data"][data_key]
             client.adapter.close()
         except Forbidden:
             raise VaultError(
                 "Permission Denied. "
-                + "make sure the token is authorised to access {path} on Vault".format(path=data[0])
+                + "make sure the token is authorised to access {path} on Vault".format(path=data_path)
             )
         except InvalidPath:
-            raise VaultError("{path} does not exist on Vault secret".format(path=data[0]))
+            raise VaultError("{path} does not exist on Vault secret".format(path=data_path))
 
         if return_data == "":
-            raise VaultError("'{key}' doesn't exist on '{path}'".format(key=data[1], path=data[0]))
+            raise VaultError("'{key}' doesn't exist on '{path}'".format(key=data_key, path=data_path))
         return return_data
 
     def dump(self):
