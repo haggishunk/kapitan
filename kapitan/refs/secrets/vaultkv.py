@@ -121,6 +121,8 @@ def vault_obj(vault_parameters):
         else:
             raise "Authentication type '{auth}' not supported".format(auth=auth_type)
 
+        cached.vaultkv_obj = client
+
     if cached.vaultkv_obj.is_authenticated():
         return cached.vaultkv_obj
     else:
