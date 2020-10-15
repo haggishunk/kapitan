@@ -523,6 +523,11 @@ class RefController(object):
         return ref
 
     def _get_from_token(self, token):
+        # **** primary underpinning of refs in kapitan ****
+        # the token:
+        #   ref type => secret backend
+        #   path => secret name
+        #   optionally, hash => secret key
         attrs = token.split(":")
 
         # "type_name:path/to/ref"
